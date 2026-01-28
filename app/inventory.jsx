@@ -1,0 +1,519 @@
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  ActivityIndicator,
+  TouchableOpacity,
+  Modal,
+  TextInput,
+  ScrollView,
+  StatusBar,
+  Alert
+} from "react-native";
+import { Stack } from "expo-router";
+
+// 1. SET YOUR CONSTANT IP HERE
+const BASE_URL = "http://127.0.0.1:8000/api";
+
+export default function Inventory() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [sellModalVisible, setSellModalVisible] = useState(false);
+  const [addModalVisible, setAddModalVisible] = useState(false);
+  const [restockModalVisible, setRestockModalVisible] = useState(false);
+
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [quantity, setQuantity] = useState("1");
+
+  const [newItem, setNewItem] = useState({
+    nameOfSeal: "",
+    partCode: "",
+    description: "",
+    price: "",
+    stock: "",
+    minStock: "5"
+  });
+
+  useEffect(() => {
+    fetchItems();
+  }, []);
+
+  const fetchItems = async () => {
+    try {
+      // Use BASE_URL
+      const res = await fetch(`${BASE_URL}/seals/`);
+      if (!res.ok) throw new Error("Could not fetch items");
+      
+      const json = await res.json();
+
+      const itemsWithNumbers = json.map(item => ({
+        ...item,
+        stock: Number(item.stock),
+        minStock: Number(item.minStock)
+      }));
+
+      setItems(itemsWithNumbers);
+      setLoading(false);
+    } catch (err) {
+      console.error(err);
+      setLoading(false);
+    }
+  };
+
+const handleUpdateStock = async (type) => {
+  if (!selectedItem || !quantity) return;
+
+  const qtyChange = parseInt(quantity);
+  const newStock = type === "sell" 
+      ? selectedItem.stock - qtyChange 
+      : selectedItem.stock + qtyChange;
+
+  try {
+    // --- Step 1: Update inventory ---
+    const invRes = await fetch(`${BASE_URL}/seals/${selectedItem.id}/`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stock: newStock }),
+    });
+
+    if (!invRes.ok) throw new Error("Inventory update failed");
+
+    // --- Step 2: Log sale only if selling ---
+    if (type === "sell") {
+      const salePayload = {
+        sealName: selectedItem.nameOfSeal,       // your Sale model expects sealName
+        quantity: qtyChange,
+        sold_price: parseFloat(selectedItem.price)  // make sure it’s a number
+      };
+
+      const saleRes = await fetch(`${BASE_URL}/sales/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(salePayload),
+      });
+
+      if (!saleRes.ok) {
+        Alert.alert("Partial Success", "Stock updated, but sale record failed.");
+      } else {
+        Alert.alert("Success", `Sold ${qtyChange} units of ${selectedItem.nameOfSeal}`);
+      }
+    } else {
+      Alert.alert("Success", `Stock updated to ${newStock}`);
+    }
+
+    // --- Step 3: Refresh inventory ---
+    fetchItems();
+    setSellModalVisible(false);
+    setRestockModalVisible(false);
+  } catch (err) {
+    console.error(err);
+    Alert.alert(
+      "Error",
+      "Network or server error. Make sure Django backend is running at 127.0.0.1:8000"
+    );
+  }
+};
+
+
+  const handleAddNewItem = async () => {
+    const payload = {
+      ...newItem,
+      price: parseFloat(newItem.price) || 0,
+      stock: parseInt(newItem.stock) || 0,
+      minStock: parseInt(newItem.minStock) || 5
+    };
+
+    try {
+      const response = await fetch(`${BASE_URL}/seals/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        fetchItems();
+        setAddModalVisible(false);
+        setNewItem({
+          nameOfSeal: "", partCode: "", description: "",
+          price: "", stock: "", minStock: "5"
+        });
+      } else {
+        Alert.alert("Error", "Check fields and try again.");
+      }
+    } catch (error) {
+      Alert.alert("Connection Error", "Is the backend running?");
+    }
+  };
+
+  // ... (Rest of your render and styles remain the same)
+
+  // Add new seal
+  // const handleAddNewItem = async () => {
+  //   const payload = {
+  //     ...newItem,
+  //     price: parseFloat(newItem.price) || 0,
+  //     stock: parseInt(newItem.stock) || 0,
+  //     minStock: parseInt(newItem.minStock) || 5
+  //   };
+
+  //   try {
+  //     const response = await fetch("http://127.0.0.1:8000/api/seals/", {
+  //       method: "POST",
+  //       headers: { "Content-Type": "application/json" },
+  //       body: JSON.stringify(payload)
+  //     });
+
+  //     const data = await response.json();
+
+  //     if (response.ok) {
+  //       fetchItems();
+  //       setAddModalVisible(false);
+  //       setNewItem({
+  //         nameOfSeal: "",
+  //         partCode: "",
+  //         description: "",
+  //         price: "",
+  //         stock: "",
+  //         minStock: "5"
+  //       });
+  //     } else {
+  //       console.error("Failed to save:", data);
+  //       alert("Failed to save: " + JSON.stringify(data));
+  //     }
+  //   } catch (error) {
+  //     console.error(error);
+  //     alert("Error saving item. Check console.");
+  //   }
+  // };
+
+  const renderHeader = () => (
+    <View style={styles.headerRow}>
+      <Text style={[styles.columnHeader, { flex: 1.5, textAlign: "left" }]}>
+        NAME
+      </Text>
+      <Text style={styles.columnHeader}>CODE</Text>
+      <Text style={styles.columnHeader}>PRICE</Text>
+      <Text style={styles.columnHeader}>STOCK</Text>
+      <Text style={[styles.columnHeader, { flex: 1.2 }]}>ACTIONS</Text>
+    </View>
+  );
+
+  const openRestockModal = (item) => {
+    setSelectedItem(item);
+    setQuantity("0");
+    setRestockModalVisible(true);
+  };
+
+  const openSellModal = (item) => {
+    setSelectedItem(item);
+    setQuantity("0");
+    setSellModalVisible(true);
+  };
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" />
+      <Stack.Screen
+        options={{
+          title: "Inventory",
+          headerStyle: { backgroundColor: "#0F172A" },
+          headerTintColor: "#fff"
+        }}
+      />
+
+      {/* --- ADD NEW SEAL MODAL --- */}
+      <Modal visible={addModalVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>New Entry</Text>
+
+            <ScrollView style={{ width: "100%" }}>
+  <Text style={styles.inputLabel}>Seal Name</Text>
+  <TextInput
+    style={styles.formInput}
+    placeholder="e.g. Hydraulic Rod Seal"
+    placeholderTextColor="#94A3B8"
+    value={newItem.nameOfSeal}
+    onChangeText={(t) => setNewItem({ ...newItem, nameOfSeal: t })}
+  />
+
+  <Text style={styles.inputLabel}>Part Code</Text>
+  <TextInput
+    style={styles.formInput}
+    placeholder="e.g. 100234"
+    placeholderTextColor="#94A3B8"
+    keyboardType="numeric"
+    value={newItem.partCode}
+    onChangeText={(t) => setNewItem({ ...newItem, partCode: t })}
+  />
+
+  <Text style={styles.inputLabel}>Description</Text>
+  <TextInput
+    style={[styles.formInput, { height: 60 }]}
+    placeholder="Enter a description for the seal"
+    placeholderTextColor="#94A3B8"
+    multiline
+    value={newItem.description}
+    onChangeText={(t) => setNewItem({ ...newItem, description: t })}
+  />
+
+  <Text style={styles.inputLabel}>Price </Text>
+  <TextInput
+    style={styles.formInput}
+    placeholder="0.00"
+    placeholderTextColor="#94A3B8"
+    keyboardType="numeric"
+    value={newItem.price}
+    onChangeText={(t) => setNewItem({ ...newItem, price: t })}
+  />
+
+  <Text style={styles.inputLabel}>Initial Stock</Text>
+  <TextInput
+    style={styles.formInput}
+    placeholder="Current quantity"
+    placeholderTextColor="#94A3B8"
+    keyboardType="numeric"
+    value={newItem.stock}
+    onChangeText={(t) => setNewItem({ ...newItem, stock: t })}
+  />
+
+  <Text style={[styles.inputLabel, { color: "#38BDF8" }]}>
+    Minimum Stock Alert Level
+  </Text>
+  <TextInput
+    style={[styles.formInput, { borderColor: "#38BDF8" }]}
+    placeholder="Alert me when stock is below..."
+    placeholderTextColor="#94A3B8"
+    keyboardType="numeric"
+    value={newItem.minStock}
+    onChangeText={(t) => setNewItem({ ...newItem, minStock: t })}
+  />
+</ScrollView>
+
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: "#334155" }]}
+                onPress={() => setAddModalVisible(false)}
+              >
+                <Text style={styles.btnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: "#10B981" }]}
+                onPress={handleAddNewItem}
+              >
+                <Text style={styles.btnText}>Save to Inventory</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* --- RESTOCK MODAL --- */}
+      <Modal visible={restockModalVisible} transparent={true} animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Restock Seal</Text>
+            <Text style={{ color: "#94A3B8", marginBottom: 15 }}>
+              {selectedItem?.nameOfSeal}
+            </Text>
+
+            <TextInput
+              style={styles.formInput}
+              keyboardType="numeric"
+              value={quantity}
+              onChangeText={setQuantity}
+              placeholder="Enter amount to add"
+              placeholderTextColor="#94A3B8"
+            />
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: "#334155" }]}
+                onPress={() => setRestockModalVisible(false)}
+              >
+                <Text style={styles.btnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: "#10B981" }]}
+                onPress={() => handleUpdateStock("add")}
+              >
+                <Text style={styles.btnText}>Confirm Add</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* --- SELL MODAL --- */}
+      <Modal visible={sellModalVisible} transparent={true} animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Sell Seal</Text>
+            <Text style={{ color: "#94A3B8", marginBottom: 15 }}>
+              {selectedItem?.nameOfSeal}
+            </Text>
+
+            <TextInput
+              style={styles.formInput}
+              keyboardType="numeric"
+              value={quantity}
+              onChangeText={setQuantity}
+            />
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: "#334155" }]}
+                onPress={() => setSellModalVisible(false)}
+              >
+                <Text style={styles.btnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: "#F59E0B" }]}
+                onPress={() => handleUpdateStock("sell")}
+              >
+                <Text style={styles.btnText}>Confirm Sell</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <View style={styles.topRow}>
+        <Text style={styles.mainTitle}>Seal Inventory</Text>
+        <TouchableOpacity
+          style={styles.addItemBtn}
+          onPress={() => setAddModalVisible(true)}
+        >
+          <Text style={styles.btnText}>+ New Seal</Text>
+        </TouchableOpacity>
+      </View>
+
+      {loading ? (
+        <ActivityIndicator size="large" color="#38BDF8" />
+      ) : (
+        <FlatList
+          data={items}
+          ListHeaderComponent={renderHeader}
+          keyExtractor={(item) => item.id.toString()}
+          renderItem={({ item }) => (
+            <View style={styles.itemCard}>
+              <Text style={[styles.cell, styles.nameText, { flex: 1.5 }]}>
+                {item.nameOfSeal}
+              </Text>
+              <Text style={styles.cell}>{item.partCode}</Text>
+              <Text style={styles.cell}>{item.price}</Text>
+ <Text
+  style={[
+    styles.cell,
+    {
+      fontWeight: "bold",
+      color: (parseFloat(item.stock) < (parseFloat(item.minStock) || 5)) 
+        ? "#EF4444" 
+        : "#10B981"
+    }
+  ]}
+>
+  {item.stock}
+</Text>
+
+
+
+              <View style={[styles.actionCell, { flex: 1.2 }]}>
+                <TouchableOpacity
+                  style={styles.sellBtn}
+                  onPress={() => openSellModal(item)}
+                >
+                  <Text style={styles.btnText}>Sell</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.addBtn}
+                  onPress={() => openRestockModal(item)}
+                >
+                  <Text style={styles.btnText}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        />
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#0F172A", padding: 16 },
+  topRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20
+  },
+  mainTitle: { fontSize: 26, fontWeight: "bold", color: "#F8FAFC" },
+  addItemBtn: { backgroundColor: "#10B981", padding: 10, borderRadius: 10 },
+  inputLabel: {
+    color: "#94A3B8",
+    fontSize: 12,
+    marginBottom: 5,
+    fontWeight: "600",
+    marginLeft: 4
+  },
+  headerRow: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: "#334155",
+    paddingBottom: 10,
+    marginBottom: 10
+  },
+  columnHeader: { flex: 1, color: "#64748B", fontWeight: "bold", fontSize: 12, textAlign: "center" },
+  itemCard: {
+    flexDirection: "row",
+    backgroundColor: "#1E293B",
+    padding: 15,
+    borderRadius: 12,
+    marginBottom: 10,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#334155"
+  },
+  cell: { flex: 1, textAlign: "center", color: "#CBD5E1", fontSize: 13 },
+  nameText: { fontWeight: "bold", color: "#F8FAFC", textAlign: "left" },
+  actionCell: { flexDirection: "row", gap: 8 },
+  sellBtn: { backgroundColor: "#F59E0B", paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6 },
+  addBtn: { backgroundColor: "#38BDF8", paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6 },
+  btnText: { color: "white", fontSize: 12, fontWeight: "bold" },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  modalContent: {
+    backgroundColor: "#1E293B",
+    padding: 25,
+    borderRadius: 20,
+    width: "85%",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#334155"
+  },
+  modalTitle: { fontSize: 20, fontWeight: "bold", color: "#F8FAFC", marginBottom: 10 },
+  formInput: {
+    backgroundColor: "#0F172A",
+    color: "#FFF",
+    width: "100%",
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: "#334155"
+  },
+  modalButtons: { flexDirection: "row", gap: 10 },
+  modalBtn: { padding: 12, borderRadius: 10, flex: 1, alignItems: "center" }
+});
